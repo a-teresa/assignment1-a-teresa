@@ -6,3 +6,6 @@ crosstool-ng
 aesd-build
 .vscode/
 test.sh.log
+
+# GitHub self-hosted runner (do not commit)
+actions-runner/
