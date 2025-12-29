@@ -1,0 +1,37 @@
+name: Assignment 1 - Self-hosted tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: self-hosted
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ruby ruby-dev
+
+      - name: Run full test
+        run: |
+          set -o pipefail
+          chmod +x ./full-test.sh ./unit-test.sh || true
+          ./full-test.sh 2>&1 | tee test.sh.log
+
+      - name: Upload logs and image artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            test.sh.log
+            test_result.png
+            build/**/*
+          if-no-files-found: warn
