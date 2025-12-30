@@ -8,49 +8,31 @@ on:
 jobs:
   test:
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout (no marketplace actions) + submodules
-        run: |
-          set -euo pipefail
-          echo "Repo: $GITHUB_REPOSITORY"
-          echo "SHA : $GITHUB_SHA"
+      # 1) Checkout repository + submodules
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
 
-          # Ensure we are in the GitHub workspace
-          cd "$GITHUB_WORKSPACE"
-
-          # Checkout exact commit
-          if [ -d .git ]; then
-            git reset --hard
-            git clean -fdx
-            git fetch --prune origin
-            git checkout -f "$GITHUB_SHA"
-          else
-            git clone "https://github.com/${GITHUB_REPOSITORY}.git" .
-            git checkout -f "$GITHUB_SHA"
-          fi
-
-          # Pull assignment-autotest submodule content
-          git submodule sync --recursive
-          git submodule update --init --recursive
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ruby ruby-dev
-
+      # 2) Run assignment tests
       - name: Run full test
         run: |
           set -euo pipefail
-          chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
+          chmod +x ./full-test.sh \
+                   ./unit-test.sh \
+                   ./finder-app/writer.sh \
+                   ./finder-app/finder.sh || true
           ./full-test.sh 2>&1 | tee test.sh.log
 
-      - name: Save results on runner (no upload-artifact allowed)
+      # 3) Save results locally on runner (fast, no upload)
+      - name: Save results on runner
         if: always()
         run: |
           mkdir -p _artifacts
           cp -f test.sh.log _artifacts/ || true
           cp -f test_result.png _artifacts/ || true
-          tar -czf _artifacts/build.tar.gz build 2>/dev/null || true
-          echo "Saved artifacts in $GITHUB_WORKSPACE/_artifacts"
+          echo "Artifacts saved in $GITHUB_WORKSPACE/_artifacts"
