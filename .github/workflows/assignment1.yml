@@ -1,9 +1,5 @@
 name: Assignment 1 - Self-hosted tests
 
-concurrency:
-  group: assignment1-${{ github.ref }}
-  cancel-in-progress: false
-
 on:
   push:
   pull_request:
@@ -13,72 +9,15 @@ jobs:
   test:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 10
-
     steps:
-      - name: Show runner info
-        shell: bash
+      - name: Print runner info
         run: |
-          set -euo pipefail
-          echo "Runner: $(hostname)"
-          echo "User:   $(whoami)"
-          echo "PWD:    $(pwd)"
-          df -h .
+          whoami
+          hostname
+          pwd
           git --version
 
-      - name: Clean workspace (fix: destination exists/not empty)
-        shell: bash
+      - name: Run tests from existing checkout
         run: |
-          set -euo pipefail
-          rm -rf "${GITHUB_WORKSPACE:?}/"* "${GITHUB_WORKSPACE:?}/".[!.]* "${GITHUB_WORKSPACE:?}/"..?* || true
-
-      - name: Manual checkout + submodules (no checkout action)
-        shell: bash
-        env:
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
-          git init
-          git remote add origin "https://github.com/${REPO}.git"
-          git fetch --no-tags --prune --depth=1 origin "${SHA}"
-          git checkout --force FETCH_HEAD
-          git submodule sync --recursive
-          git submodule update --init --recursive --depth 1
-
-      - name: Ensure scripts are executable
-        shell: bash
-        run: |
-          set -euo pipefail
           chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
-
-      - name: Run tests (timeout; full-test already logs to test.sh.log)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "=== conf/assignment.txt ==="
-          if [ -f conf/assignment.txt ]; then
-            cat -A conf/assignment.txt
-          else
-            echo "MISSING conf/assignment.txt"
-          fi
-
           timeout 300s ./full-test.sh
-          rc=$?
-          echo "full-test.sh rc=$rc"
-
-          echo "=== test.sh.log (tail) ==="
-          tail -n 200 test.sh.log || true
-
-          exit "$rc"
-
-      - name: Save minimal artifacts on runner (no upload-artifact)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p _artifacts
-          cp -f test.sh.log _artifacts/ || true
-          cp -f test_result.png _artifacts/ || true
-          echo "Artifacts saved in $GITHUB_WORKSPACE/_artifacts"
