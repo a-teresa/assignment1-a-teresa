@@ -1,6 +1,5 @@
 name: Assignment 1 - Self-hosted tests
 
-# Ensure GitHub doesn't cancel a run just because you pushed again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -16,38 +15,61 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repository (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 1
+      - name: Checkout repository + submodules (no marketplace actions)
+        env:
+          REPO: ${{ github.repository }}
+          SHA:  ${{ github.sha }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Repo: $REPO"
+          echo "SHA : $SHA"
+          echo "WS  : $GITHUB_WORKSPACE"
 
-      - name: Run full test (fails if it hangs)
+          cd "$GITHUB_WORKSPACE"
+          rm -rf .git || true
+
+          git init
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${REPO}.git"
+          git fetch --depth=1 origin "$SHA"
+          git checkout -f FETCH_HEAD
+
+          # Submodules
+          git submodule sync --recursive
+          git -c protocol.version=2 submodule update --init --recursive --depth=1
+
+          git status --porcelain || true
+          echo "Checkout OK"
+
+      - name: Ensure entropy available (haveged)
+        run: |
+          set -euo pipefail
+          # haveged is already installed on your VM; just ensure it is running
+          sudo systemctl enable --now haveged || true
+          sudo systemctl is-active --quiet haveged && echo "haveged: active" || (echo "haveged: NOT active" && sudo systemctl status haveged || true)
+          echo "entropy_avail=$(cat /proc/sys/kernel/random/entropy_avail || echo unknown)"
+
+      - name: Run full test (real-time logs + hard timeout)
         run: |
           set -euo pipefail
           rm -rf /tmp/aeld-data || true
+
           chmod +x ./full-test.sh \
                    ./unit-test.sh \
                    ./finder-app/writer.sh \
                    ./finder-app/finder.sh || true
 
-          # If anything hangs, the job fails instead of running forever
-          timeout 120s ./full-test.sh 2>&1 | tee test.sh.log
+          echo "=== START full-test.sh ==="
+          timeout 180s stdbuf -oL -eL ./full-test.sh 2>&1 | stdbuf -oL -eL tee test.sh.log
+          rc=${PIPESTATUS[0]}
+          echo "=== END full-test.sh (rc=$rc) ==="
+          exit "$rc"
 
-          # If timeout killed it, return 124 clearly
-          status=${PIPESTATUS[0]}
-          if [ "$status" -eq 124 ]; then
-            echo "ERROR: full-test.sh timed out"
-            exit 124
-          fi
-          exit "$status"
-
-      - name: Upload logs and image artifacts (small only)
+      - name: Save minimal artifacts on runner (no upload-artifact)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-output
-          path: |
-            test.sh.log
-            test_result.png
-          if-no-files-found: warn
+        run: |
+          set -euo pipefail
+          mkdir -p _artifacts
+          cp -f test.sh.log _artifacts/ || true
+          cp -f test_result.png _artifacts/ || true
+          echo "Saved artifacts in $GITHUB_WORKSPACE/_artifacts"
