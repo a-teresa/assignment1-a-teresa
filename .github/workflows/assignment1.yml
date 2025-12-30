@@ -1,6 +1,5 @@
 name: Assignment 1 - Self-hosted tests
 
-# Don't cancel a running job just because you pushed again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -24,17 +23,16 @@ jobs:
           echo "User:   $(whoami)"
           echo "WS:     ${GITHUB_WORKSPACE}"
           echo "PWD:    $(pwd)"
-          df -h "${GITHUB_WORKSPACE}" || true
           git --version
 
-      - name: Clean workspace (fix: destination exists/not empty)
+      - name: Clean workspace
         shell: bash
         run: |
           set -euo pipefail
           shopt -s dotglob nullglob
           rm -rf "${GITHUB_WORKSPACE:?}/"*
 
-      - name: Manual checkout + submodules (no actions/checkout)
+      - name: Manual checkout + submodules
         shell: bash
         env:
           REPO: ${{ github.repository }}
@@ -42,45 +40,22 @@ jobs:
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
-
-          echo "Cloning ${REPO} at ${SHA}"
           git init
           git remote add origin "https://github.com/${REPO}.git"
           git fetch --depth=1 origin "${SHA}"
           git checkout -f FETCH_HEAD
-
-          # Submodules
           git submodule sync --recursive
           git submodule update --init --recursive --depth=1
 
-          echo "Checked out:"
-          git rev-parse HEAD
-          git submodule status --recursive || true
-
-      - name: Ensure tools exist (timeout, stdbuf)
-        shell: bash
-        run: |
-          set -euo pipefail
-          command -v timeout >/dev/null
-          command -v stdbuf  >/dev/null
-
-      - name: Run tests (timeout + realtime log)
+      - name: Run tests (timeout)
         shell: bash
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
-
-          chmod +x ./full-test.sh \
-                   ./unit-test.sh \
-                   ./finder-app/writer.sh \
-                   ./finder-app/finder.sh || true
-
-          echo "=== START full-test.sh ==="
-          # single tee, no extra pipe rc surprises
+          chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
           timeout 300s stdbuf -oL -eL ./full-test.sh 2>&1 | tee test.sh.log
-          echo "=== END full-test.sh ==="
 
-      - name: Save minimal artifacts locally (no upload)
+      - name: Save artifacts locally
         if: always()
         shell: bash
         run: |
