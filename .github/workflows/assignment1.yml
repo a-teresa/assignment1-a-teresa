@@ -26,7 +26,7 @@ jobs:
           df -h "${GITHUB_WORKSPACE}" || true
           git --version
           command -v cmake || true
-          command -v make  || true
+          command -v make || true
 
       - name: Clean workspace (fix: destination exists/not empty)
         shell: bash
@@ -34,14 +34,14 @@ jobs:
           set -euo pipefail
           # Remove everything inside workspace, but not the workspace directory itself
           rm -rf "${GITHUB_WORKSPACE:?}/"* \
-                 "${GITHUB_WORKSPACE:?}/".[!.]* \
-                 "${GITHUB_WORKSPACE:?}/"..?* || true
+            "${GITHUB_WORKSPACE:?}/".[!.]* \
+            "${GITHUB_WORKSPACE:?}/"..?* || true
 
       - name: Manual checkout + submodules (no marketplace actions)
         shell: bash
         env:
           REPO: ${{ github.repository }}
-          SHA:  ${{ github.sha }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
