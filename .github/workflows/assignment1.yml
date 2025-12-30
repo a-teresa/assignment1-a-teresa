@@ -11,27 +11,46 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout (no marketplace actions) + submodules
+        run: |
+          set -euo pipefail
+          echo "Repo: $GITHUB_REPOSITORY"
+          echo "SHA : $GITHUB_SHA"
 
-      - name: Install dependencies (Ubuntu)
+          # Ensure we are in the GitHub workspace
+          cd "$GITHUB_WORKSPACE"
+
+          # Checkout exact commit
+          if [ -d .git ]; then
+            git reset --hard
+            git clean -fdx
+            git fetch --prune origin
+            git checkout -f "$GITHUB_SHA"
+          else
+            git clone "https://github.com/${GITHUB_REPOSITORY}.git" .
+            git checkout -f "$GITHUB_SHA"
+          fi
+
+          # Pull assignment-autotest submodule content
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ruby ruby-dev
 
       - name: Run full test
         run: |
-          set -o pipefail
-          chmod +x ./full-test.sh ./unit-test.sh || true
+          set -euo pipefail
+          chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
           ./full-test.sh 2>&1 | tee test.sh.log
 
-      - name: Upload logs and image artifacts
+      - name: Save results on runner (no upload-artifact allowed)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-output
-          path: |
-            test.sh.log
-            test_result.png
-            build/**/*
-          if-no-files-found: warn
+        run: |
+          mkdir -p _artifacts
+          cp -f test.sh.log _artifacts/ || true
+          cp -f test_result.png _artifacts/ || true
+          tar -czf _artifacts/build.tar.gz build 2>/dev/null || true
+          echo "Saved artifacts in $GITHUB_WORKSPACE/_artifacts"
