@@ -1,5 +1,10 @@
 name: Assignment 1 - Self-hosted tests
 
+# Ensure GitHub doesn't cancel a run just because you pushed again
+concurrency:
+  group: assignment1-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
   pull_request:
@@ -11,28 +16,38 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # 1) Checkout repository + submodules
       - name: Checkout repository (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      # 2) Run assignment tests
-      - name: Run full test
+      - name: Run full test (fails if it hangs)
         run: |
           set -euo pipefail
+          rm -rf /tmp/aeld-data || true
           chmod +x ./full-test.sh \
                    ./unit-test.sh \
                    ./finder-app/writer.sh \
                    ./finder-app/finder.sh || true
-          ./full-test.sh 2>&1 | tee test.sh.log
 
-      # 3) Save results locally on runner (fast, no upload)
-      - name: Save results on runner
+          # If anything hangs, the job fails instead of running forever
+          timeout 120s ./full-test.sh 2>&1 | tee test.sh.log
+
+          # If timeout killed it, return 124 clearly
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 124 ]; then
+            echo "ERROR: full-test.sh timed out"
+            exit 124
+          fi
+          exit "$status"
+
+      - name: Upload logs and image artifacts (small only)
         if: always()
-        run: |
-          mkdir -p _artifacts
-          cp -f test.sh.log _artifacts/ || true
-          cp -f test_result.png _artifacts/ || true
-          echo "Artifacts saved in $GITHUB_WORKSPACE/_artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: |
+            test.sh.log
+            test_result.png
+          if-no-files-found: warn
