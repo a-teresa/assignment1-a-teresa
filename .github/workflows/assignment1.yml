@@ -1,8 +1,4 @@
-name: Assignment 1 - Self-hosted tests
-
-concurrency:
-  group: assignment1-${{ github.ref }}
-  cancel-in-progress: false
+name: "Assignment 1 - Self-hosted tests"
 
 on:
   push:
@@ -23,80 +19,53 @@ jobs:
           echo "User:   $(whoami)"
           echo "WS:     ${GITHUB_WORKSPACE}"
           echo "PWD:    $(pwd)"
-          df -h "${GITHUB_WORKSPACE}" || true
           git --version
           command -v cmake || true
-          command -v make || true
+          command -v make  || true
 
-      - name: Clean workspace (fix: destination exists/not empty)
+      - name: Clean workspace
         shell: bash
         run: |
           set -euo pipefail
-          # Remove everything inside workspace, but not the workspace directory itself
-          rm -rf "${GITHUB_WORKSPACE:?}/"* \
-            "${GITHUB_WORKSPACE:?}/".[!.]* \
-            "${GITHUB_WORKSPACE:?}/"..?* || true
+          rm -rf "${GITHUB_WORKSPACE:?}/"* || true
+          rm -rf "${GITHUB_WORKSPACE:?}/".[!.]* || true
+          rm -rf "${GITHUB_WORKSPACE:?}/"..?* || true
 
-      - name: Manual checkout + submodules (no marketplace actions)
+      - name: Checkout repository + submodules
         shell: bash
         env:
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
+          REPO: "${{ github.repository }}"
+          SHA:  "${{ github.sha }}"
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
 
-          echo "Cloning ${REPO}..."
           git init
-          git remote remove origin 2>/dev/null || true
           git remote add origin "https://github.com/${REPO}.git"
+          git fetch --depth 1 origin "${SHA}"
+          git checkout -f "${SHA}"
 
-          # Fetch only what we need
-          git fetch --no-tags --depth 1 origin "${SHA}"
-          git checkout --force "${SHA}"
-
-          # Submodules (assignment-autotest, Unity, etc.)
           git submodule sync --recursive
           git submodule update --init --recursive --depth 1
 
-          # Sanity checks
           test -x ./full-test.sh
           test -x ./unit-test.sh
           test -f ./conf/assignment.txt
-          test -f ./assignment-autotest/CMakeLists.txt
 
-      - name: Run tests (single timeout, no extra pipes)
+      - name: Run full-test.sh
         shell: bash
         run: |
           set -euo pipefail
           cd "${GITHUB_WORKSPACE}"
 
-          # Ensure scripts are executable (ignore if already)
           chmod +x ./full-test.sh ./unit-test.sh ./finder-app/*.sh || true
-
-          # Avoid stale tmp state across runs
           rm -rf /tmp/aeld-data* || true
 
-          echo "=== START full-test.sh ==="
           timeout 300s ./full-test.sh
-          echo "=== END full-test.sh ==="
 
-      - name: Dump tail of log (always)
+      - name: Show test log (always)
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          cd "${GITHUB_WORKSPACE}"
-          echo "=== tail -n 200 test.sh.log ==="
           tail -n 200 test.sh.log || true
-
-      - name: Save minimal artifacts locally (always)
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${GITHUB_WORKSPACE}"
-          mkdir -p _artifacts
-          cp -f test.sh.log _artifacts/ || true
-          cp -f test_result.png _artifacts/ || true
-          echo "Artifacts saved in ${GITHUB_WORKSPACE}/_artifacts"
