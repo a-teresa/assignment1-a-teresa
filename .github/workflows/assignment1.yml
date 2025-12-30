@@ -1,5 +1,6 @@
 name: Assignment 1 - Self-hosted tests
 
+# Don't cancel a running job just because you pushed again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -15,44 +16,78 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout repository + submodules (no marketplace actions)
+      - name: Show runner info
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $(hostname)"
+          echo "User  : $(whoami)"
+          echo "Date  : $(date -u)"
+          echo "PWD   : $(pwd)"
+          echo "WS    : $GITHUB_WORKSPACE"
+          git --version || true
+
+      # IMPORTANT:
+      # Use a REAL clone (not git init + fetch) so submodules have a valid repository handle.
+      - name: Checkout repository + submodules (manual, clean, submodule-safe)
+        shell: bash
         env:
           REPO: ${{ github.repository }}
           SHA:  ${{ github.sha }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           echo "Repo: $REPO"
           echo "SHA : $SHA"
           echo "WS  : $GITHUB_WORKSPACE"
 
+          # Clean workspace to avoid stale .git/modules issues
+          rm -rf "$GITHUB_WORKSPACE"/*
+          rm -rf "$GITHUB_WORKSPACE"/.git
+
+          # Proper clone creates correct .git structure for submodules
+          git clone --no-checkout --depth 1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
-          rm -rf .git || true
 
-          git init
-          git remote add origin "https://x-access-token:${TOKEN}@github.com/${REPO}.git"
-          git fetch --depth=1 origin "$SHA"
-          git checkout -f FETCH_HEAD
+          # Checkout the exact commit for this run (detached is fine)
+          git fetch --depth 1 origin "$SHA"
+          git checkout -f "$SHA"
 
-          # Submodules
+          # Init/update submodules
           git submodule sync --recursive
-          git -c protocol.version=2 submodule update --init --recursive --depth=1
+          git submodule update --init --recursive --depth 1
 
-          git status --porcelain || true
-          echo "Checkout OK"
+          echo "Submodules:"
+          git submodule status --recursive || true
 
-      - name: Ensure entropy available (haveged)
+      - name: Ensure realtime logging tools exist (stdbuf/timeout)
+        shell: bash
         run: |
           set -euo pipefail
-          # haveged is already installed on your VM; just ensure it is running
-          sudo systemctl enable --now haveged || true
-          sudo systemctl is-active --quiet haveged && echo "haveged: active" || (echo "haveged: NOT active" && sudo systemctl status haveged || true)
-          echo "entropy_avail=$(cat /proc/sys/kernel/random/entropy_avail || echo unknown)"
+          command -v timeout >/dev/null
+          command -v stdbuf  >/dev/null
 
-      - name: Run full test (real-time logs + hard timeout)
+      # Optional: haveged helps with entropy on some self-hosted runners.
+      # Don't fail if it's missing or if you can't sudo.
+      - name: (Optional) Start haveged if available
+        shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/aeld-data || true
+          if command -v haveged >/dev/null 2>&1; then
+            echo "haveged is installed."
+            if sudo -n true 2>/dev/null; then
+              sudo systemctl enable --now haveged || true
+              systemctl is-active haveged || true
+            else
+              echo "No passwordless sudo; skipping haveged service start."
+            fi
+          else
+            echo "haveged not installed; skipping."
+          fi
+
+      - name: Run full test (hard timeout + realtime logs)
+        shell: bash
+        run: |
+          set -euo pipefail
 
           chmod +x ./full-test.sh \
                    ./unit-test.sh \
@@ -60,6 +95,7 @@ jobs:
                    ./finder-app/finder.sh || true
 
           echo "=== START full-test.sh ==="
+          # 180s is plenty (your local run is ~0.6s). Prevent hangs forever.
           timeout 180s stdbuf -oL -eL ./full-test.sh 2>&1 | stdbuf -oL -eL tee test.sh.log
           rc=${PIPESTATUS[0]}
           echo "=== END full-test.sh (rc=$rc) ==="
@@ -67,9 +103,11 @@ jobs:
 
       - name: Save minimal artifacts on runner (no upload-artifact)
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p _artifacts
           cp -f test.sh.log _artifacts/ || true
           cp -f test_result.png _artifacts/ || true
           echo "Saved artifacts in $GITHUB_WORKSPACE/_artifacts"
+          ls -la _artifacts || true
