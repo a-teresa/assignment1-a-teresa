@@ -1,6 +1,6 @@
 name: Assignment 1 - Self-hosted tests
 
-# Do NOT cancel a running job if you push again
+# Don't cancel a running job just because you pushed again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -16,101 +16,75 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # ------------------------------------------------------------------
-      # 1. Clean workspace explicitly (important on self-hosted runners)
-      # ------------------------------------------------------------------
-      - name: Clean workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Cleaning workspace: $GITHUB_WORKSPACE"
-          rm -rf "$GITHUB_WORKSPACE"/*
-          rm -rf "$GITHUB_WORKSPACE"/.git || true
-
-      # ------------------------------------------------------------------
-      # 2. Checkout repo + submodules (THE RIGHT WAY)
-      # ------------------------------------------------------------------
-      - name: Checkout repository with submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-          clean: true
-
-      # ------------------------------------------------------------------
-      # 3. Show runner info (debug aid)
-      # ------------------------------------------------------------------
       - name: Show runner info
         shell: bash
         run: |
           set -euo pipefail
-          whoami
-          hostname
-          uname -a
+          echo "Runner: $(hostname)"
+          echo "User:   $(whoami)"
+          echo "PWD:    $(pwd)"
           df -h .
+          git --version
+          cmake --version || true
+          gcc --version || true
 
-      # ------------------------------------------------------------------
-      # 4. Ensure required tools exist
-      # ------------------------------------------------------------------
-      - name: Ensure realtime logging tools exist
+      - name: Clean workspace (fix: destination exists/not empty)
         shell: bash
         run: |
           set -euo pipefail
-          command -v timeout
-          command -v stdbuf
+          shopt -s dotglob || true
+          # Remove everything in the workspace to avoid leftover state between runs
+          rm -rf "$GITHUB_WORKSPACE"/* || true
+          mkdir -p "$GITHUB_WORKSPACE"
 
-      # ------------------------------------------------------------------
-      # 5. Optional entropy helper (NON-FATAL)
-      # ------------------------------------------------------------------
-      - name: (Optional) Start haveged if available
+      - name: Manual checkout (no marketplace actions) + submodules
         shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          SHA:  ${{ github.sha }}
         run: |
           set -euo pipefail
-          if command -v haveged >/dev/null 2>&1; then
-            echo "haveged installed"
-            if sudo -n true 2>/dev/null; then
-              sudo systemctl enable --now haveged || true
-              systemctl is-active haveged || true
-            else
-              echo "No passwordless sudo, skipping haveged start"
-            fi
-          else
-            echo "haveged not installed, skipping"
-          fi
+          cd "$GITHUB_WORKSPACE"
 
-      # ------------------------------------------------------------------
-      # 6. Fix script permissions
-      # ------------------------------------------------------------------
+          git init
+          git remote add origin "https://github.com/${REPO}.git"
+          git fetch --no-tags --prune --depth=1 origin "${SHA}"
+          git checkout --force FETCH_HEAD
+
+          # Submodules
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth 1
+
       - name: Ensure scripts are executable
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x \
-            ./full-test.sh \
-            ./unit-test.sh \
-            ./finder-app/writer.sh \
-            ./finder-app/finder.sh || true
+          chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
 
-      # ------------------------------------------------------------------
-      # 7. Run tests WITH HARD TIMEOUT + REALTIME LOGS
-      # ------------------------------------------------------------------
-      - name: Run full test suite
+      - name: Run tests (timeout, no outer tee; full-test already logs)
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "=== START full-test.sh ==="
-          timeout 180s stdbuf -oL -eL ./full-test.sh \
-            2>&1 | tee test.sh.log
+          # Debug assignment value (helps catch CRLF / whitespace)
+          echo "=== conf/assignment.txt ==="
+          if [ -f conf/assignment.txt ]; then
+            cat -A conf/assignment.txt
+          else
+            echo "MISSING conf/assignment.txt"
+          fi
 
-          rc=${PIPESTATUS[0]}
-          echo "=== END full-test.sh (rc=$rc) ==="
+          # Run with timeout. DO NOT pipe to tee (full-test.sh already tee's into test.sh.log)
+          timeout 300s ./full-test.sh
+          rc=$?
+          echo "full-test.sh rc=$rc"
+
+          echo "=== test.sh.log (tail) ==="
+          tail -n 200 test.sh.log || true
+
           exit "$rc"
 
-      # ------------------------------------------------------------------
-      # 8. Save minimal artifacts locally (no upload-artifact hang)
-      # ------------------------------------------------------------------
-      - name: Save minimal artifacts
+      - name: Save minimal artifacts on runner (no upload-artifact)
         if: always()
         shell: bash
         run: |
