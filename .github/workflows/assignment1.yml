@@ -1,6 +1,5 @@
 name: Assignment 1 - Self-hosted tests
 
-# Don't cancel a running job just because you pushed again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -25,33 +24,25 @@ jobs:
           echo "PWD:    $(pwd)"
           df -h .
           git --version
-          cmake --version || true
-          gcc --version || true
 
       - name: Clean workspace (fix: destination exists/not empty)
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s dotglob || true
-          # Remove everything in the workspace to avoid leftover state between runs
-          rm -rf "$GITHUB_WORKSPACE"/* || true
-          mkdir -p "$GITHUB_WORKSPACE"
+          rm -rf "${GITHUB_WORKSPACE:?}/"* "${GITHUB_WORKSPACE:?}/".[!.]* "${GITHUB_WORKSPACE:?}/"..?* || true
 
-      - name: Manual checkout (no marketplace actions) + submodules
+      - name: Manual checkout + submodules (no checkout action)
         shell: bash
         env:
           REPO: ${{ github.repository }}
-          SHA:  ${{ github.sha }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
-
           git init
           git remote add origin "https://github.com/${REPO}.git"
           git fetch --no-tags --prune --depth=1 origin "${SHA}"
           git checkout --force FETCH_HEAD
-
-          # Submodules
           git submodule sync --recursive
           git submodule update --init --recursive --depth 1
 
@@ -61,12 +52,11 @@ jobs:
           set -euo pipefail
           chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
 
-      - name: Run tests (timeout, no outer tee; full-test already logs)
+      - name: Run tests (timeout; full-test already logs to test.sh.log)
         shell: bash
         run: |
           set -euo pipefail
 
-          # Debug assignment value (helps catch CRLF / whitespace)
           echo "=== conf/assignment.txt ==="
           if [ -f conf/assignment.txt ]; then
             cat -A conf/assignment.txt
@@ -74,7 +64,6 @@ jobs:
             echo "MISSING conf/assignment.txt"
           fi
 
-          # Run with timeout. DO NOT pipe to tee (full-test.sh already tee's into test.sh.log)
           timeout 300s ./full-test.sh
           rc=$?
           echo "full-test.sh rc=$rc"
