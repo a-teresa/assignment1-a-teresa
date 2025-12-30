@@ -1,6 +1,6 @@
 name: Assignment 1 - Self-hosted tests
 
-# Don't cancel a running job just because you pushed again
+# Do NOT cancel a running job if you push again
 concurrency:
   group: assignment1-${{ github.ref }}
   cancel-in-progress: false
@@ -16,92 +16,101 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # ------------------------------------------------------------------
+      # 1. Clean workspace explicitly (important on self-hosted runners)
+      # ------------------------------------------------------------------
+      - name: Clean workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Cleaning workspace: $GITHUB_WORKSPACE"
+          rm -rf "$GITHUB_WORKSPACE"/*
+          rm -rf "$GITHUB_WORKSPACE"/.git || true
+
+      # ------------------------------------------------------------------
+      # 2. Checkout repo + submodules (THE RIGHT WAY)
+      # ------------------------------------------------------------------
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          clean: true
+
+      # ------------------------------------------------------------------
+      # 3. Show runner info (debug aid)
+      # ------------------------------------------------------------------
       - name: Show runner info
         shell: bash
         run: |
           set -euo pipefail
-          echo "Runner: $(hostname)"
-          echo "User  : $(whoami)"
-          echo "Date  : $(date -u)"
-          echo "PWD   : $(pwd)"
-          echo "WS    : $GITHUB_WORKSPACE"
-          git --version || true
+          whoami
+          hostname
+          uname -a
+          df -h .
 
-      # IMPORTANT:
-      # Use a REAL clone (not git init + fetch) so submodules have a valid repository handle.
-      - name: Checkout repository + submodules (manual, clean, submodule-safe)
-        shell: bash
-        env:
-          REPO: ${{ github.repository }}
-          SHA:  ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          echo "Repo: $REPO"
-          echo "SHA : $SHA"
-          echo "WS  : $GITHUB_WORKSPACE"
-
-          # Clean workspace to avoid stale .git/modules issues
-          rm -rf "$GITHUB_WORKSPACE"/*
-          rm -rf "$GITHUB_WORKSPACE"/.git
-
-          # Proper clone creates correct .git structure for submodules
-          git clone --no-checkout --depth 1 "https://github.com/${REPO}.git" "$GITHUB_WORKSPACE"
-          cd "$GITHUB_WORKSPACE"
-
-          # Checkout the exact commit for this run (detached is fine)
-          git fetch --depth 1 origin "$SHA"
-          git checkout -f "$SHA"
-
-          # Init/update submodules
-          git submodule sync --recursive
-          git submodule update --init --recursive --depth 1
-
-          echo "Submodules:"
-          git submodule status --recursive || true
-
-      - name: Ensure realtime logging tools exist (stdbuf/timeout)
+      # ------------------------------------------------------------------
+      # 4. Ensure required tools exist
+      # ------------------------------------------------------------------
+      - name: Ensure realtime logging tools exist
         shell: bash
         run: |
           set -euo pipefail
-          command -v timeout >/dev/null
-          command -v stdbuf  >/dev/null
+          command -v timeout
+          command -v stdbuf
 
-      # Optional: haveged helps with entropy on some self-hosted runners.
-      # Don't fail if it's missing or if you can't sudo.
+      # ------------------------------------------------------------------
+      # 5. Optional entropy helper (NON-FATAL)
+      # ------------------------------------------------------------------
       - name: (Optional) Start haveged if available
         shell: bash
         run: |
           set -euo pipefail
           if command -v haveged >/dev/null 2>&1; then
-            echo "haveged is installed."
+            echo "haveged installed"
             if sudo -n true 2>/dev/null; then
               sudo systemctl enable --now haveged || true
               systemctl is-active haveged || true
             else
-              echo "No passwordless sudo; skipping haveged service start."
+              echo "No passwordless sudo, skipping haveged start"
             fi
           else
-            echo "haveged not installed; skipping."
+            echo "haveged not installed, skipping"
           fi
 
-      - name: Run full test (hard timeout + realtime logs)
+      # ------------------------------------------------------------------
+      # 6. Fix script permissions
+      # ------------------------------------------------------------------
+      - name: Ensure scripts are executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x \
+            ./full-test.sh \
+            ./unit-test.sh \
+            ./finder-app/writer.sh \
+            ./finder-app/finder.sh || true
+
+      # ------------------------------------------------------------------
+      # 7. Run tests WITH HARD TIMEOUT + REALTIME LOGS
+      # ------------------------------------------------------------------
+      - name: Run full test suite
         shell: bash
         run: |
           set -euo pipefail
 
-          chmod +x ./full-test.sh \
-                   ./unit-test.sh \
-                   ./finder-app/writer.sh \
-                   ./finder-app/finder.sh || true
-
           echo "=== START full-test.sh ==="
-          # 180s is plenty (your local run is ~0.6s). Prevent hangs forever.
-          timeout 180s stdbuf -oL -eL ./full-test.sh 2>&1 | stdbuf -oL -eL tee test.sh.log
+          timeout 180s stdbuf -oL -eL ./full-test.sh \
+            2>&1 | tee test.sh.log
+
           rc=${PIPESTATUS[0]}
           echo "=== END full-test.sh (rc=$rc) ==="
           exit "$rc"
 
-      - name: Save minimal artifacts on runner (no upload-artifact)
+      # ------------------------------------------------------------------
+      # 8. Save minimal artifacts locally (no upload-artifact hang)
+      # ------------------------------------------------------------------
+      - name: Save minimal artifacts
         if: always()
         shell: bash
         run: |
@@ -109,5 +118,4 @@ jobs:
           mkdir -p _artifacts
           cp -f test.sh.log _artifacts/ || true
           cp -f test_result.png _artifacts/ || true
-          echo "Saved artifacts in $GITHUB_WORKSPACE/_artifacts"
-          ls -la _artifacts || true
+          echo "Artifacts saved in $GITHUB_WORKSPACE/_artifacts"
