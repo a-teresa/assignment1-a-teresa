@@ -1,5 +1,10 @@
 name: Assignment 1 - Self-hosted tests
 
+# Don't cancel a running job just because you pushed again
+concurrency:
+  group: assignment1-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   push:
   pull_request:
@@ -9,15 +14,78 @@ jobs:
   test:
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 10
+
     steps:
       - name: Print runner info
+        shell: bash
         run: |
-          whoami
-          hostname
-          pwd
+          set -euo pipefail
+          echo "Runner: $(hostname)"
+          echo "User:   $(whoami)"
+          echo "WS:     ${GITHUB_WORKSPACE}"
+          echo "PWD:    $(pwd)"
+          df -h "${GITHUB_WORKSPACE}" || true
           git --version
 
-      - name: Run tests from existing checkout
+      - name: Clean workspace (fix: destination exists/not empty)
+        shell: bash
         run: |
-          chmod +x ./full-test.sh ./unit-test.sh ./finder-app/writer.sh ./finder-app/finder.sh || true
-          timeout 300s ./full-test.sh
+          set -euo pipefail
+          shopt -s dotglob nullglob
+          rm -rf "${GITHUB_WORKSPACE:?}/"*
+
+      - name: Manual checkout + submodules (no actions/checkout)
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          SHA:  ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+
+          echo "Cloning ${REPO} at ${SHA}"
+          git init
+          git remote add origin "https://github.com/${REPO}.git"
+          git fetch --depth=1 origin "${SHA}"
+          git checkout -f FETCH_HEAD
+
+          # Submodules
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth=1
+
+          echo "Checked out:"
+          git rev-parse HEAD
+          git submodule status --recursive || true
+
+      - name: Ensure tools exist (timeout, stdbuf)
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v timeout >/dev/null
+          command -v stdbuf  >/dev/null
+
+      - name: Run tests (timeout + realtime log)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+
+          chmod +x ./full-test.sh \
+                   ./unit-test.sh \
+                   ./finder-app/writer.sh \
+                   ./finder-app/finder.sh || true
+
+          echo "=== START full-test.sh ==="
+          # single tee, no extra pipe rc surprises
+          timeout 300s stdbuf -oL -eL ./full-test.sh 2>&1 | tee test.sh.log
+          echo "=== END full-test.sh ==="
+
+      - name: Save minimal artifacts locally (no upload)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _artifacts
+          cp -f test.sh.log _artifacts/ || true
+          cp -f test_result.png _artifacts/ || true
+          echo "Artifacts saved in ${GITHUB_WORKSPACE}/_artifacts"
