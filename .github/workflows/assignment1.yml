@@ -52,7 +52,7 @@ jobs:
           test -x ./unit-test.sh
           test -f ./conf/assignment.txt
 
-      - name: Run full-test.sh
+      - name: Run full-test.sh (diagnose timeout)
         shell: bash
         run: |
           set -euo pipefail
@@ -61,7 +61,28 @@ jobs:
           chmod +x ./full-test.sh ./unit-test.sh ./finder-app/*.sh || true
           rm -rf /tmp/aeld-data* || true
 
-          timeout 300s ./full-test.sh
+          echo "START: $(date -Is)"
+          start=$(date +%s)
+
+          # Use a timeout that is BELOW job timeout-minutes (10 min)
+          # e.g. 9 minutes, with a hard kill 10s later if it ignores SIGTERM
+          if ! timeout --foreground -k 10s 9m ./full-test.sh; then
+            rc=$?
+            end=$(date +%s)
+            echo "FAILED (rc=$rc) after $((end-start))s at $(date -Is)"
+
+            echo "=== tail -n 200 test.sh.log ==="
+            tail -n 200 test.sh.log || true
+
+            echo "=== ps (top offenders) ==="
+            ps -eo pid,ppid,etime,cmd --sort=etime | tail -n 40 || true
+
+            # rc=124 specifically means timeout fired
+            exit "$rc"
+          fi
+
+          end=$(date +%s)
+          echo "END: $(date -Is) in $((end-start))s"
 
       - name: Show test log (always)
         if: always()
